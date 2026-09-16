@@ -92,3 +92,36 @@ class TelegramNotifier:
         except Exception as e:
             logger.error(f"Failed to send message to Telegram: {e}")
             return False
+
+    def send_auto_reply_notification(self, author_username: str, tweet_url: str, comment: str) -> bool:
+        """
+        Sends an instant notification to Telegram informing that an auto-reply was posted to X.
+        """
+        if not self.bot_token or not self.chat_id:
+            return False
+
+        safe_author = html.escape(author_username)
+        safe_comment = html.escape(comment)
+
+        message = (
+            "🤖 <b>[NIGHT AUTO-REPLY POSTED ON X]</b>\n\n"
+            f"👤 <b>Replied To:</b> @{safe_author}\n"
+            f"💬 <b>Posted Comment:</b>\n<i>\"{safe_comment}\"</i>\n\n"
+            f"🔗 <a href=\"{tweet_url}\">View Conversation on X</a>"
+        )
+
+        telegram_api_url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+        payload = {
+            "chat_id": self.chat_id,
+            "text": message,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": False
+        }
+
+        try:
+            r = requests.post(telegram_api_url, json=payload, timeout=10)
+            return r.status_code == 200
+        except Exception as e:
+            logger.error(f"Failed to send auto-reply notification to Telegram: {e}")
+            return False
+

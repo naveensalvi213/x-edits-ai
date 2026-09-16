@@ -117,11 +117,12 @@ TASK:
 
 2. Identify the role needed: "Video Editor", "Thumbnail Designer", "Both", or "Other".
 
-3. If qualified, write a short, high-converting, personalized reply comment (2-4 sentences max) for X/Twitter.
-   - Address their specific niche, project requirements, or tone mentioned in the tweet.
-   - Highlight value (e.g. fast turnaround, high CTR thumbnails, retention-focused editing).
-   - End with a clean Call To Action (e.g. "Sent you a DM with samples!", "Check your DMs for portfolio!").
-   - Sound human, professional, confident, and non-spammy.
+3. If qualified, write an ultra-short, natural, personalized reply comment (1 to 2 short sentences max) for X/Twitter.
+   - Address their specific niche, video style, or project requirement mentioned in their post.
+   - CRITICAL RULE: NEVER say "I DMed you", "Sent you a DM", or "Check your DMs".
+   - CRITICAL RULE: ALWAYS invite THEM to DM you (e.g., "Feel free to drop me a DM with the details!", "Shoot me a DM if you're still looking!", "DM me and let's connect!").
+   - CRITICAL RULE: NEVER include links, URLs, or hashtags.
+   - Sound casual, human, confident, professional, and non-spammy.
 
 Respond ONLY with a valid JSON object strictly matching this schema:
 {{

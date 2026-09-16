@@ -6,6 +6,7 @@ from state_manager import StateManager
 from x_monitor import XMonitor, TweetPost
 from gemini_analyzer import GeminiAnalyzer
 from telegram_notifier import TelegramNotifier
+from auto_replier import AutoReplier
 
 # Setup structured logging
 logging.basicConfig(
@@ -23,6 +24,7 @@ def run_monitor():
     x_monitor = XMonitor()
     gemini_analyzer = GeminiAnalyzer()
     telegram_notifier = TelegramNotifier()
+    auto_replier = AutoReplier()
 
     keywords = config.get_keywords()
     logger.info(f"Target Keywords ({len(keywords)}): {keywords}")
@@ -66,6 +68,20 @@ def run_monitor():
             )
             if success:
                 alerts_sent += 1
+
+            # Auto-reply during night window (11 PM - 7 AM IST) with human pacing
+            if analysis.personalized_comment:
+                replied = auto_replier.post_reply(
+                    tweet_id=post.id,
+                    author_username=post.author_username,
+                    comment_text=analysis.personalized_comment
+                )
+                if replied:
+                    telegram_notifier.send_auto_reply_notification(
+                        author_username=post.author_username,
+                        tweet_url=post.url,
+                        comment=analysis.personalized_comment
+                    )
         else:
             logger.info(f"Disqualified tweet ID {post.id}: {analysis.reasoning}")
 
