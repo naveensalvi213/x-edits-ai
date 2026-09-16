@@ -9,6 +9,7 @@ import asyncio
 import re
 import time
 import tempfile
+import random
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -19,6 +20,18 @@ from curl_cffi import requests as cr
 import config
 
 logger = logging.getLogger(__name__)
+
+# Pool of Webshare proxies to bypass datacenter IP blocks on cloud runners
+DEFAULT_PROXIES = [
+    "http://umskkzac:k6inespkkljj@31.59.20.176:6754",
+    "http://umskkzac:k6inespkkljj@45.38.107.97:6014",
+    "http://umskkzac:k6inespkkljj@198.105.121.200:6462",
+    "http://umskkzac:k6inespkkljj@64.137.96.74:6641",
+    "http://umskkzac:k6inespkkljj@198.23.243.226:6361",
+    "http://umskkzac:k6inespkkljj@38.154.185.97:6370",
+    "http://umskkzac:k6inespkkljj@84.247.60.125:6095",
+    "http://umskkzac:k6inespkkljj@142.111.67.146:5611",
+]
 
 
 @dataclass
@@ -33,21 +46,26 @@ class TweetPost:
 
 class XMonitor:
     """
-    Scrapes X search results using twscrape + curl_cffi (Chrome TLS fingerprint).
-    
-    Flow:
-      1. curl_cffi (Chrome TLS impersonation) fetches x.com to obtain ct0 CSRF cookie.
-      2. twscrape (with TWS_HTTP_BACKEND=curl) uses auth_token + ct0 to call
-         X's GraphQL search API with full browser TLS impersonation.
+    Scrapes X search results using twscrape + curl_cffi (Chrome TLS fingerprint)
+    routed through Webshare proxies to bypass Cloudflare/X datacenter IP blocking.
     """
 
     def __init__(self):
         self.auth_token = config.TWITTER_AUTH_TOKEN.strip()
         self._db_path = os.path.join(tempfile.gettempdir(), "twscrape_x_monitor.db")
+        custom_proxy = os.getenv("PROXY_URL", "").strip()
+        if custom_proxy:
+            self.proxies = [custom_proxy]
+        else:
+            self.proxies = list(DEFAULT_PROXIES)
 
-    def _get_ct0(self) -> tuple:
+    def _get_active_proxy(self) -> Optional[str]:
+        """Returns a proxy from the pool."""
+        return random.choice(self.proxies) if self.proxies else None
+
+    def _get_ct0(self, proxy: Optional[str] = None) -> tuple:
         """
-        Use curl_cffi (Chrome TLS impersonation) to obtain the ct0 CSRF cookie.
+        Use curl_cffi (Chrome TLS impersonation) via proxy to obtain the ct0 CSRF cookie.
         """
         BEARER = (
             "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs"
@@ -73,24 +91,36 @@ class XMonitor:
                     url, 
                     allow_redirects=True, 
                     timeout=15,
+                    proxy=proxy,
                     headers=extra_headers if extra_headers else None,
                 )
                 ct0 = session.cookies.get("ct0")
                 twid = session.cookies.get("twid", "")
                 if ct0:
-                    logger.info(f"ct0 obtained (HTTP {resp.status_code})")
+                    logger.info(f"ct0 obtained (HTTP {resp.status_code}) via proxy: {proxy.split('@')[-1] if proxy else 'direct'}")
                     return ct0, twid
             except Exception as e:
-                logger.debug(f"Failed to fetch ct0 from {url}: {e}")
+                logger.debug(f"Failed to fetch ct0 from {url} via {proxy}: {e}")
         
         logger.error("Failed to obtain ct0 from all URL attempts.")
         return None, None
 
     async def _search_async(self, keywords: List[str], max_per_keyword: int) -> List[TweetPost]:
-        """Run all keyword searches via twscrape using curl-cffi backend."""
-        ct0, twid = self._get_ct0()
+        """Run all keyword searches via twscrape using proxy and curl-cffi backend."""
+        # Try proxies in pool until one obtains ct0
+        proxy = None
+        ct0, twid = None, None
+        proxy_candidates = list(self.proxies)
+        random.shuffle(proxy_candidates)
+
+        for candidate in proxy_candidates:
+            ct0, twid = self._get_ct0(proxy=candidate)
+            if ct0:
+                proxy = candidate
+                break
+
         if not ct0:
-            logger.error("Cannot search — ct0 cookie not obtained.")
+            logger.error("Cannot search — ct0 cookie not obtained across all proxies.")
             return []
 
         cookie_str = f"auth_token={self.auth_token}; ct0={ct0}"
@@ -104,13 +134,14 @@ class XMonitor:
             except Exception:
                 pass
 
-        api = twscrape.API(self._db_path)
+        api = twscrape.API(self._db_path, proxy=proxy)
         await api.pool.add_account(
             username="x_monitor_account",
             password="dummy",
             email="dummy@dummy.com",
             email_password="dummy",
             cookies=cookie_str,
+            proxy=proxy,
         )
 
         accounts = await api.pool.get_all()
@@ -118,7 +149,7 @@ class XMonitor:
             logger.error("twscrape account is not active — cookies may be invalid.")
             return []
 
-        logger.info("twscrape account active with curl-cffi backend. Starting searches...")
+        logger.info(f"twscrape account active with proxy {proxy.split('@')[-1]}. Starting searches...")
 
         all_posts: List[TweetPost] = []
         for keyword in keywords:
