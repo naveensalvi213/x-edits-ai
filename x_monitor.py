@@ -1,10 +1,9 @@
 import logging
-import json
-import urllib.parse
-import requests
-import tweepy
+import asyncio
+import re
 from dataclasses import dataclass
 from typing import List, Optional
+from playwright.async_api import async_playwright
 import config
 
 logger = logging.getLogger(__name__)
@@ -20,159 +19,129 @@ class TweetPost:
 
 class XMonitor:
     def __init__(self):
-        raw_token = config.TWITTER_BEARER_TOKEN.strip()
-        # Decode token if URL-encoded (%2F, %3D, etc.)
-        self.bearer_token = urllib.parse.unquote(raw_token) if "%" in raw_token else raw_token
-        self.auth_token = raw_token
-        self.client: Optional[tweepy.Client] = None
-        
-        if self.bearer_token and self.bearer_token.startswith("AAAAAAAAAAAAAAAAAAAA"):
-            try:
-                self.client = tweepy.Client(bearer_token=self.bearer_token)
-                logger.info("Tweepy client initialized with official Twitter API v2 Bearer Token.")
-            except Exception as e:
-                logger.error(f"Failed to initialize Tweepy client: {e}")
+        self.auth_token = config.TWITTER_BEARER_TOKEN.strip()
 
-    def _search_via_auth_cookie(self, keyword: str, auth_token_val: str) -> List[TweetPost]:
+    def _scrape_keyword_sync(self, keyword: str, max_results: int = 15) -> List[TweetPost]:
         """
-        Searches X using browser auth_token cookie session.
+        Runs Playwright search in an event loop to fetch live tweets for a keyword.
         """
+        return asyncio.run(self._scrape_keyword_async(keyword, max_results))
+
+    async def _scrape_keyword_async(self, keyword: str, max_results: int = 15) -> List[TweetPost]:
         results: List[TweetPost] = []
+        if not self.auth_token:
+            logger.error("No auth_token provided in TWITTER_BEARER_TOKEN!")
+            return results
+
+        logger.info(f"Playwright searching X for keyword: '{keyword}'...")
+
         try:
-            s = requests.Session()
-            s.headers.update({
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
-                'Authorization': 'Bearer AAAAAAAAAAAAAAAAAAAAAPYXHAOAAAACALWWSpBxYuNd6L3cv4nRyZxiPw%3DZD82aKBoMVB44hWr8aWFreQuiZSSFzgWrLmswXxac9X4cn',
-                'x-twitter-active-user': 'yes',
-                'x-twitter-client-language': 'en',
-            })
-            s.cookies.set('auth_token', auth_token_val.strip(), domain='x.com')
-            s.get('https://x.com')
-            
-            cookie_dict = dict(s.cookies)
-            ct0 = cookie_dict.get('ct0')
-            
-            if not ct0:
-                logger.error("Could not obtain ct0 CSRF cookie from X. auth_token may be invalid or expired.")
-                return results
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(
+                    headless=True,
+                    args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+                )
+                context = await browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+                    viewport={"width": 1280, "height": 800}
+                )
 
-            s.headers.update({'x-csrf-token': ct0})
+                # Inject auth_token cookie
+                await context.add_cookies([
+                    {
+                        "name": "auth_token",
+                        "value": self.auth_token,
+                        "domain": ".x.com",
+                        "path": "/",
+                        "httpOnly": True,
+                        "secure": True,
+                        "sameSite": "Lax"
+                    },
+                    {
+                        "name": "auth_token",
+                        "value": self.auth_token,
+                        "domain": "x.com",
+                        "path": "/",
+                        "httpOnly": True,
+                        "secure": True,
+                        "sameSite": "Lax"
+                    }
+                ])
 
-            variables = {
-                "rawQuery": f'"{keyword}"',
-                "count": 20,
-                "querySource": "typed_query",
-                "product": "Latest"
-            }
-            
-            features = {
-                "rweb_tipjar_consumption_enabled": True,
-                "responsive_web_graphql_exclude_directive_enabled": True,
-                "verified_phone_label_enabled": False,
-                "creator_subscriptions_tweet_preview_api_enabled": True,
-                "responsive_web_graphql_timeline_navigation_enabled": True,
-                "responsive_web_graphql_skip_user_profile_image_extensions_enabled": False,
-                "communities_web_enable_tweet_community_results_fetch": True,
-                "c9s_tweet_anatomy_subscribable_bookmarks_is_enabled": True,
-                "tweet_awards_web_tipping_enabled": False,
-                "freedom_of_speech_not_reach_fetch_enabled": True,
-                "standardized_nudges_misinfo": True,
-                "tweet_with_visibility_results_prefer_media_due_to_visibility_risk": True,
-                "responsive_web_enhance_cards_enabled": False
-            }
-
-            url = f"https://x.com/i/api/graphql/nK1FbB0vLEj3f7lQ5YyMvA/SearchTimeline?variables={urllib.parse.quote(json.dumps(variables))}&features={urllib.parse.quote(json.dumps(features))}"
-            
-            res = s.get(url, timeout=15)
-            if res.status_code == 200:
-                data = res.json()
-                instructions = data.get("data", {}).get("search_by_raw_query", {}).get("search_timeline", {}).get("timeline", {}).get("instructions", [])
+                page = await context.new_page()
+                search_url = f"https://x.com/search?q={urllib_parse_quote(keyword)}&f=live"
                 
-                for inst in instructions:
-                    entries = inst.get("entries", [])
-                    for entry in entries:
-                        item = entry.get("content", {}).get("itemContent", {}).get("tweet_results", {}).get("result", {})
-                        if not item:
+                try:
+                    await page.goto(search_url, wait_until="domcontentloaded", timeout=25000)
+                    await page.wait_for_timeout(4000)
+                except Exception as goto_err:
+                    logger.warning(f"Page navigation timeout or error: {goto_err}")
+
+                # Scroll down slightly to trigger loading extra tweets
+                await page.evaluate("window.scrollBy(0, 800)")
+                await page.wait_for_timeout(2000)
+
+                tweet_elements = await page.query_selector_all('[data-testid="tweet"]')
+                logger.info(f"Found {len(tweet_elements)} raw tweet elements for '{keyword}'.")
+
+                for t_el in tweet_elements[:max_results]:
+                    try:
+                        inner_text = await t_el.inner_text()
+                        if not inner_text:
                             continue
-                        legacy = item.get("legacy", {})
-                        user_legacy = item.get("core", {}).get("user_results", {}).get("result", {}).get("legacy", {})
-                        
-                        tweet_id = str(legacy.get("id_str") or item.get("rest_id", ""))
-                        text = legacy.get("full_text", "")
-                        username = user_legacy.get("screen_name", "unknown")
-                        created_at = legacy.get("created_at", "")
-                        
-                        if tweet_id and text:
-                            url_link = f"https://x.com/{username}/status/{tweet_id}"
-                            results.append(TweetPost(
-                                id=tweet_id,
-                                text=text,
-                                author_username=username,
-                                created_at=created_at,
-                                url=url_link,
-                                keyword=keyword
-                            ))
-            else:
-                logger.error(f"X Web Search failed ({res.status_code}): {res.text[:200]}")
+
+                        # Extract status link
+                        status_links = await t_el.query_selector_all('a[href*="/status/"]')
+                        tweet_url = ""
+                        tweet_id = ""
+                        author_username = "unknown"
+
+                        for link in status_links:
+                            href = await link.get_attribute("href")
+                            if href and "/status/" in href:
+                                match = re.search(r'/([^/]+)/status/(\d+)', href)
+                                if match:
+                                    author_username = match.group(1)
+                                    tweet_id = match.group(2)
+                                    tweet_url = f"https://x.com/{author_username}/status/{tweet_id}"
+                                    break
+
+                        if not tweet_id:
+                            continue
+
+                        # Clean text
+                        lines = [line.strip() for line in inner_text.splitlines() if line.strip()]
+                        full_text = " ".join(lines)
+
+                        results.append(TweetPost(
+                            id=tweet_id,
+                            text=full_text,
+                            author_username=author_username,
+                            created_at="",
+                            url=tweet_url,
+                            keyword=keyword
+                        ))
+                    except Exception as el_err:
+                        logger.warning(f"Error parsing tweet element: {el_err}")
+
+                await browser.close()
 
         except Exception as e:
-            logger.error(f"Error during auth_cookie search for '{keyword}': {e}")
+            logger.error(f"Playwright error during search for '{keyword}': {e}")
 
         return results
 
-    def search_keyword(self, keyword: str, max_results: int = 10) -> List[TweetPost]:
-        """
-        Searches recent posts on X using official Tweepy API v2 client or auth_token cookie fallback.
-        """
-        if self.client:
-            results: List[TweetPost] = []
-            query = f'"{keyword}" -is:retweet'
-            try:
-                response = self.client.search_recent_tweets(
-                    query=query,
-                    max_results=min(max(max_results, 10), 100),
-                    tweet_fields=["created_at", "author_id", "text"],
-                    expansions=["author_id"],
-                    user_fields=["username"]
-                )
-
-                if response and response.data:
-                    users_map = {}
-                    if response.includes and "users" in response.includes:
-                        for user in response.includes["users"]:
-                            users_map[user.id] = user.username
-
-                    for tweet in response.data:
-                        author_username = users_map.get(tweet.author_id, "unknown_user")
-                        tweet_url = f"https://x.com/{author_username}/status/{tweet.id}"
-                        created_str = tweet.created_at.isoformat() if tweet.created_at else ""
-
-                        post = TweetPost(
-                            id=str(tweet.id),
-                            text=tweet.text,
-                            author_username=author_username,
-                            created_at=created_str,
-                            url=tweet_url,
-                            keyword=keyword
-                        )
-                        results.append(post)
-                return results
-            except Exception as e:
-                logger.error(f"Tweepy search error for '{keyword}': {e}")
-
-        # Fallback: search via auth_token cookie
-        if self.auth_token:
-            logger.info(f"Attempting search for '{keyword}' via auth_token cookie...")
-            return self._search_via_auth_cookie(keyword, self.auth_token)
-
-        logger.error("No valid search mechanism available. Provide TWITTER_BEARER_TOKEN or valid auth_token.")
-        return []
+    def search_keyword(self, keyword: str, max_results: int = 15) -> List[TweetPost]:
+        return self._scrape_keyword_sync(keyword, max_results)
 
     def fetch_all_new_posts(self, keywords: List[str]) -> List[TweetPost]:
         all_posts: List[TweetPost] = []
         for kw in keywords:
-            logger.info(f"Searching X for keyword: '{kw}'...")
             posts = self.search_keyword(kw, max_results=config.MAX_TWEETS_PER_KEYWORD)
-            logger.info(f"Found {len(posts)} posts for '{kw}'.")
+            logger.info(f"Retrieved {len(posts)} posts for '{kw}'.")
             all_posts.extend(posts)
         return all_posts
+
+def urllib_parse_quote(text: str) -> str:
+    import urllib.parse
+    return urllib.parse.quote(text)

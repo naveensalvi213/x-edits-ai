@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class GeminiAnalysisResult:
     is_hiring_post: bool
-    role_type: str  # "Video Editor", "Thumbnail Designer", "Both", or "Unknown"
+    role_type: str
     reasoning: str
     personalized_comment: str
 
@@ -77,7 +77,7 @@ Respond ONLY with a valid JSON object strictly matching this schema:
 
         try:
             response = self.client.models.generate_content(
-                model='gemini-2.5-flash',
+                model='gemini-3.6-flash',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
