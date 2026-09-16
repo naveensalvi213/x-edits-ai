@@ -34,6 +34,12 @@ def run_monitor():
     new_posts = [p for p in posts if not state_mgr.is_seen(p.id)]
     logger.info(f"Found {len(new_posts)} un-seen posts to evaluate.")
 
+    # Cap to max 15 candidate posts per 5-minute run for speed and strict quota safety
+    MAX_PER_RUN = 15
+    if len(new_posts) > MAX_PER_RUN:
+        logger.info(f"Capping evaluation to latest {MAX_PER_RUN} posts for this run.")
+        new_posts = new_posts[:MAX_PER_RUN]
+
     qualified_count = 0
     alerts_sent = 0
 
