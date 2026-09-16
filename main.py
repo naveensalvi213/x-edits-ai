@@ -63,8 +63,8 @@ def run_monitor():
         else:
             logger.info(f"Disqualified tweet ID {post.id}: {analysis.reasoning}")
 
-        # Pace calls to respect Gemini Free Tier rate limits
-        time.sleep(1.5)
+        # Pace calls (4.0s) to strictly stay within the 15 RPM Gemini Free Tier limit
+        time.sleep(4.0)
 
     # 4. Save updated state
     state_mgr.save()
