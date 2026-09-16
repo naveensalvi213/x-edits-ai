@@ -134,6 +134,12 @@ class XMonitor:
             except Exception:
                 pass
 
+        try:
+            import twscrape.db
+            twscrape.db.DB._init_once.clear()
+        except Exception:
+            pass
+
         api = twscrape.API(self._db_path, proxy=proxy)
         await api.pool.add_account(
             username="x_monitor_account",
