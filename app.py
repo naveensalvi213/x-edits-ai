@@ -1,4 +1,4 @@
-﻿import os
+import os
 import sys
 import time
 import json
@@ -45,6 +45,11 @@ def background_monitor_worker():
 class HealthHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         return
+
+    def do_HEAD(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
 
     def do_GET(self):
         global last_run_time, last_run_status, run_count
