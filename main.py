@@ -1,5 +1,6 @@
 import logging
 import sys
+import time
 import config
 from state_manager import StateManager
 from x_monitor import XMonitor, TweetPost
@@ -61,6 +62,9 @@ def run_monitor():
                 alerts_sent += 1
         else:
             logger.info(f"Disqualified tweet ID {post.id}: {analysis.reasoning}")
+
+        # Pace calls to respect Gemini Free Tier rate limits
+        time.sleep(1.5)
 
     # 4. Save updated state
     state_mgr.save()

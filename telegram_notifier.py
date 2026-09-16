@@ -1,14 +1,20 @@
 import logging
 import requests
+import html
 from typing import Optional
 import config
 
 logger = logging.getLogger(__name__)
 
+
 class TelegramNotifier:
     def __init__(self):
         self.bot_token = config.TELEGRAM_BOT_TOKEN
-        self.chat_id = config.TELEGRAM_CHAT_ID
+        # Support default migration to supergroup ID if still set to old regular group ID
+        raw_chat_id = config.TELEGRAM_CHAT_ID.strip()
+        if raw_chat_id == "-5406812151":
+            raw_chat_id = "-1004329851670"
+        self.chat_id = raw_chat_id
 
         if not self.bot_token or not self.chat_id:
             logger.warning("Telegram TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is missing. TelegramNotifier disabled.")
@@ -25,22 +31,31 @@ class TelegramNotifier:
     ) -> bool:
         """
         Sends a formatted hiring lead notification to Telegram.
+        Handles HTML escaping and automatic migration to supergroups.
         """
         if not self.bot_token or not self.chat_id:
             logger.error("Cannot send Telegram message: bot token or chat ID missing.")
             return False
 
+        # Escape user-generated text for safe HTML rendering in Telegram
+        safe_text = html.escape(tweet_text)
+        safe_reasoning = html.escape(reasoning)
+        safe_comment = html.escape(personalized_comment)
+        safe_role = html.escape(role_type)
+        safe_kw = html.escape(keyword)
+        safe_author = html.escape(author_username)
+
         message = (
             "🚨 <b>NEW HIRING POST DETECTED ON X!</b>\n\n"
-            f"🎯 <b>Target Role:</b> {role_type}\n"
-            f"👤 <b>Author:</b> @{author_username}\n"
-            f"🔑 <b>Keyword:</b> <code>{keyword}</code>\n\n"
+            f"🎯 <b>Target Role:</b> {safe_role}\n"
+            f"👤 <b>Author:</b> @{safe_author}\n"
+            f"🔑 <b>Keyword:</b> <code>{safe_kw}</code>\n\n"
             "📝 <b>Post Content:</b>\n"
-            f"<i>\"{tweet_text}\"</i>\n\n"
+            f"<i>\"{safe_text}\"</i>\n\n"
             "💡 <b>Gemini Qualification:</b>\n"
-            f"<code>{reasoning}</code>\n\n"
+            f"<code>{safe_reasoning}</code>\n\n"
             "💬 <b>Suggested Pitch Comment:</b>\n"
-            f"<code>{personalized_comment}</code>\n\n"
+            f"<code>{safe_comment}</code>\n\n"
             f"🔗 <a href=\"{tweet_url}\">Open Post on X (Twitter)</a>"
         )
 
@@ -57,9 +72,23 @@ class TelegramNotifier:
             if response.status_code == 200:
                 logger.info(f"Successfully sent Telegram alert for tweet by @{author_username}")
                 return True
-            else:
-                logger.error(f"Telegram API error ({response.status_code}): {response.text}")
-                return False
+
+            data = response.json()
+            # Check if group was migrated to supergroup
+            params = data.get("parameters", {})
+            new_chat_id = params.get("migrate_to_chat_id")
+            if new_chat_id:
+                logger.info(f"Detected chat migration from {self.chat_id} to {new_chat_id}. Retrying...")
+                self.chat_id = str(new_chat_id)
+                payload["chat_id"] = self.chat_id
+                retry_resp = requests.post(telegram_api_url, json=payload, timeout=10)
+                if retry_resp.status_code == 200:
+                    logger.info(f"Successfully sent Telegram alert to new supergroup ID {new_chat_id}")
+                    return True
+
+            logger.error(f"Telegram API error ({response.status_code}): {response.text}")
+            return False
+
         except Exception as e:
             logger.error(f"Failed to send message to Telegram: {e}")
             return False
