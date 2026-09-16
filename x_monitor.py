@@ -20,15 +20,16 @@ class TweetPost:
 
 class XMonitor:
     def __init__(self):
-        self.bearer_token = config.TWITTER_BEARER_TOKEN
-        self.auth_token = config.TWITTER_BEARER_TOKEN  # Can also be passed as auth_token
+        raw_token = config.TWITTER_BEARER_TOKEN.strip()
+        # Decode token if URL-encoded (%2F, %3D, etc.)
+        self.bearer_token = urllib.parse.unquote(raw_token) if "%" in raw_token else raw_token
+        self.auth_token = raw_token
         self.client: Optional[tweepy.Client] = None
         
-        # Check if bearer token looks like official v2 bearer token (starts with AAAAAAAAAAAAAAAAAAAA)
         if self.bearer_token and self.bearer_token.startswith("AAAAAAAAAAAAAAAAAAAA"):
             try:
                 self.client = tweepy.Client(bearer_token=self.bearer_token)
-                logger.info("Tweepy client initialized with official Bearer Token.")
+                logger.info("Tweepy client initialized with official Twitter API v2 Bearer Token.")
             except Exception as e:
                 logger.error(f"Failed to initialize Tweepy client: {e}")
 
@@ -45,9 +46,11 @@ class XMonitor:
                 'x-twitter-active-user': 'yes',
                 'x-twitter-client-language': 'en',
             })
-            s.cookies.set('auth_token', auth_token_val, domain='.x.com')
-            s.get('https://x.com/i/flow/login')
-            ct0 = s.cookies.get('ct0')
+            s.cookies.set('auth_token', auth_token_val.strip(), domain='x.com')
+            s.get('https://x.com')
+            
+            cookie_dict = dict(s.cookies)
+            ct0 = cookie_dict.get('ct0')
             
             if not ct0:
                 logger.error("Could not obtain ct0 CSRF cookie from X. auth_token may be invalid or expired.")
@@ -56,7 +59,7 @@ class XMonitor:
             s.headers.update({'x-csrf-token': ct0})
 
             variables = {
-                "rawQuery": f'"{keyword}" -is:retweet',
+                "rawQuery": f'"{keyword}"',
                 "count": 20,
                 "querySource": "typed_query",
                 "product": "Latest"
@@ -121,7 +124,6 @@ class XMonitor:
         """
         Searches recent posts on X using official Tweepy API v2 client or auth_token cookie fallback.
         """
-        # If official tweepy client initialized, use API v2
         if self.client:
             results: List[TweetPost] = []
             query = f'"{keyword}" -is:retweet'
