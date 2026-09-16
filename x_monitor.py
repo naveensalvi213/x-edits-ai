@@ -37,12 +37,23 @@ class XMonitor:
             async with async_playwright() as p:
                 browser = await p.chromium.launch(
                     headless=True,
-                    args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+                    args=[
+                        "--no-sandbox",
+                        "--disable-setuid-sandbox",
+                        "--disable-dev-shm-usage",
+                        "--disable-blink-features=AutomationControlled",
+                        "--disable-infobars",
+                        "--window-size=1280,800"
+                    ]
                 )
                 context = await browser.new_context(
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-                    viewport={"width": 1280, "height": 800}
+                    viewport={"width": 1280, "height": 800},
+                    locale="en-US"
                 )
+
+                # Mask navigator.webdriver
+                await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
                 # Inject auth_token cookie
                 await context.add_cookies([
@@ -67,6 +78,14 @@ class XMonitor:
                 ])
 
                 page = await context.new_page()
+                
+                # First visit home page to establish session & ct0
+                try:
+                    await page.goto("https://x.com/home", wait_until="domcontentloaded", timeout=15000)
+                    await page.wait_for_timeout(2000)
+                except Exception as e:
+                    logger.warning(f"Home page init note: {e}")
+
                 search_url = f"https://x.com/search?q={urllib.parse.quote(keyword)}&f=live"
                 
                 try:
