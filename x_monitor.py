@@ -1,8 +1,14 @@
+import os
+# Force twscrape to use curl-cffi (Chrome TLS fingerprint) instead of httpx
+# This bypasses X's bot detection on Linux datacenter/cloud runners like GitHub Actions
+os.environ["TWS_HTTP_BACKEND"] = "curl"
+os.environ["TWS_RAISE_WHEN_NO_ACCOUNT"] = "1"
+
 import logging
 import asyncio
-import os
 import re
 import time
+import tempfile
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -27,41 +33,32 @@ class TweetPost:
 
 class XMonitor:
     """
-    Scrapes X search results using twscrape + curl_cffi for authentication.
+    Scrapes X search results using twscrape + curl_cffi (Chrome TLS fingerprint).
     
     Flow:
-      1. curl_cffi (Chrome TLS fingerprint) fetches x.com/home with auth_token
-         cookie → X returns ct0 CSRF token in response cookies
-      2. twscrape uses auth_token + ct0 to authenticate and call X's GraphQL
-         search API directly — no browser, works on GitHub Actions Linux
+      1. curl_cffi (Chrome TLS impersonation) fetches x.com to obtain ct0 CSRF cookie.
+      2. twscrape (with TWS_HTTP_BACKEND=curl) uses auth_token + ct0 to call
+         X's GraphQL search API with full browser TLS impersonation.
     """
-
-    _API_DB = "/tmp/twscrape_x_monitor.db"
 
     def __init__(self):
         self.auth_token = config.TWITTER_AUTH_TOKEN.strip()
+        self._db_path = os.path.join(tempfile.gettempdir(), "twscrape_x_monitor.db")
 
     def _get_ct0(self) -> tuple:
         """
         Use curl_cffi (Chrome TLS impersonation) to obtain the ct0 CSRF cookie.
-        
-        Key insight: ANY request to x.com — even ones returning 403 — will set
-        the ct0 cookie. We try multiple endpoints in order, stopping at the first
-        that provides ct0. This works even on GitHub Actions cloud IPs that may
-        get 403 from x.com/home.
         """
         BEARER = (
             "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs"
             "%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
         )
         
-        # Try URLs in order — badge_count works from cloud IPs even when it 403s
         urls_to_try = [
             ("https://x.com/home", {}),
             ("https://x.com/", {}),
             ("https://x.com/i/flow/login", {}),
             ("https://x.com/search?q=hello&f=live", {}),
-            # Lightweight API endpoint — 403 response but STILL sets ct0 cookie!
             ("https://x.com/i/api/2/badge_count/badge_count.json?supports_ntab_urt=1", {
                 "authorization": f"Bearer {BEARER}",
                 "x-twitter-active-user": "yes",
@@ -81,10 +78,8 @@ class XMonitor:
                 ct0 = session.cookies.get("ct0")
                 twid = session.cookies.get("twid", "")
                 if ct0:
-                    logger.info(f"ct0 obtained from {url.split('?')[0].split('/')[-1]} (HTTP {resp.status_code})")
+                    logger.info(f"ct0 obtained (HTTP {resp.status_code})")
                     return ct0, twid
-                else:
-                    logger.debug(f"ct0 not set by {url.split('?')[0]} (HTTP {resp.status_code})")
             except Exception as e:
                 logger.debug(f"Failed to fetch ct0 from {url}: {e}")
         
@@ -92,22 +87,24 @@ class XMonitor:
         return None, None
 
     async def _search_async(self, keywords: List[str], max_per_keyword: int) -> List[TweetPost]:
-        """Run all keyword searches via twscrape."""
+        """Run all keyword searches via twscrape using curl-cffi backend."""
         ct0, twid = self._get_ct0()
         if not ct0:
             logger.error("Cannot search — ct0 cookie not obtained.")
             return []
 
-        # Build cookie string
         cookie_str = f"auth_token={self.auth_token}; ct0={ct0}"
         if twid:
             cookie_str += f"; twid={twid}"
 
-        # Remove stale DB to avoid "account already exists" warning
-        if os.path.exists(self._API_DB):
-            os.remove(self._API_DB)
+        # Clean up existing db to prevent duplicate account errors
+        if os.path.exists(self._db_path):
+            try:
+                os.remove(self._db_path)
+            except Exception:
+                pass
 
-        api = twscrape.API(self._API_DB)
+        api = twscrape.API(self._db_path)
         await api.pool.add_account(
             username="x_monitor_account",
             password="dummy",
@@ -121,7 +118,7 @@ class XMonitor:
             logger.error("twscrape account is not active — cookies may be invalid.")
             return []
 
-        logger.info("twscrape account active. Starting keyword searches.")
+        logger.info("twscrape account active with curl-cffi backend. Starting searches...")
 
         all_posts: List[TweetPost] = []
         for keyword in keywords:
@@ -145,7 +142,7 @@ class XMonitor:
                 logger.info(f"Found {count} tweets for '{keyword}'.")
             except Exception as search_err:
                 logger.error(f"twscrape search error for '{keyword}': {search_err}")
-            time.sleep(0.5)
+            time.sleep(1)
 
         return all_posts
 
