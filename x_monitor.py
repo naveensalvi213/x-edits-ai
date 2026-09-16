@@ -1,13 +1,19 @@
 import logging
 import asyncio
+import os
 import re
-import urllib.parse
+import time
 from dataclasses import dataclass
 from typing import List, Optional
-from playwright.async_api import async_playwright
+
+import twscrape
+from twscrape.accounts_pool import parse_cookies, has_required_cookies
+from curl_cffi import requests as cr
+
 import config
 
 logger = logging.getLogger(__name__)
+
 
 @dataclass
 class TweetPost:
@@ -18,141 +24,100 @@ class TweetPost:
     url: str
     keyword: str
 
+
 class XMonitor:
+    """
+    Scrapes X search results using twscrape + curl_cffi for authentication.
+    
+    Flow:
+      1. curl_cffi (Chrome TLS fingerprint) fetches x.com/home with auth_token
+         cookie → X returns ct0 CSRF token in response cookies
+      2. twscrape uses auth_token + ct0 to authenticate and call X's GraphQL
+         search API directly — no browser, works on GitHub Actions Linux
+    """
+
+    _API_DB = "/tmp/twscrape_x_monitor.db"
+
     def __init__(self):
         self.auth_token = config.TWITTER_AUTH_TOKEN.strip()
 
-    def _scrape_keyword_sync(self, keyword: str, max_results: int = 15) -> List[TweetPost]:
-        return asyncio.run(self._scrape_keyword_async(keyword, max_results))
-
-    async def _scrape_keyword_async(self, keyword: str, max_results: int = 15) -> List[TweetPost]:
-        results: List[TweetPost] = []
-        if not self.auth_token:
-            logger.error("No auth_token provided in TWITTER_AUTH_TOKEN!")
-            return results
-
-        logger.info(f"Playwright searching X for keyword: '{keyword}'...")
-
+    def _get_ct0(self) -> Optional[str]:
+        """Use curl_cffi (Chrome TLS impersonation) to obtain the ct0 CSRF cookie."""
         try:
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(
-                    headless=True,
-                    args=[
-                        "--no-sandbox",
-                        "--disable-setuid-sandbox",
-                        "--disable-dev-shm-usage",
-                        "--disable-blink-features=AutomationControlled",
-                        "--disable-infobars",
-                        "--window-size=1280,800"
-                    ]
-                )
-                context = await browser.new_context(
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-                    viewport={"width": 1280, "height": 800},
-                    locale="en-US"
-                )
-
-                # Mask navigator.webdriver
-                await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-
-                # Inject auth_token cookie
-                await context.add_cookies([
-                    {
-                        "name": "auth_token",
-                        "value": self.auth_token,
-                        "domain": ".x.com",
-                        "path": "/",
-                        "httpOnly": True,
-                        "secure": True,
-                        "sameSite": "Lax"
-                    },
-                    {
-                        "name": "auth_token",
-                        "value": self.auth_token,
-                        "domain": "x.com",
-                        "path": "/",
-                        "httpOnly": True,
-                        "secure": True,
-                        "sameSite": "Lax"
-                    }
-                ])
-
-                page = await context.new_page()
-                
-                # First visit home page to establish session & ct0
-                try:
-                    await page.goto("https://x.com/home", wait_until="domcontentloaded", timeout=15000)
-                    await page.wait_for_timeout(2000)
-                except Exception as e:
-                    logger.warning(f"Home page init note: {e}")
-
-                search_url = f"https://x.com/search?q={urllib.parse.quote(keyword)}&f=live"
-                
-                try:
-                    await page.goto(search_url, wait_until="domcontentloaded", timeout=25000)
-                    await page.wait_for_selector('[data-testid="tweet"]', timeout=15000)
-                except Exception as goto_err:
-                    logger.warning(f"Wait for tweet selector notice: {goto_err}")
-
-                # Scroll down slightly to trigger loading extra tweets
-                await page.evaluate("window.scrollBy(0, 800)")
-                await page.wait_for_timeout(2000)
-
-                tweet_elements = await page.query_selector_all('[data-testid="tweet"]')
-                logger.info(f"Found {len(tweet_elements)} raw tweet elements for '{keyword}'.")
-
-                for t_el in tweet_elements[:max_results]:
-                    try:
-                        inner_text = await t_el.inner_text()
-                        if not inner_text:
-                            continue
-
-                        status_links = await t_el.query_selector_all('a[href*="/status/"]')
-                        tweet_url = ""
-                        tweet_id = ""
-                        author_username = "unknown"
-
-                        for link in status_links:
-                            href = await link.get_attribute("href")
-                            if href and "/status/" in href:
-                                match = re.search(r'/([^/]+)/status/(\d+)', href)
-                                if match:
-                                    author_username = match.group(1)
-                                    tweet_id = match.group(2)
-                                    tweet_url = f"https://x.com/{author_username}/status/{tweet_id}"
-                                    break
-
-                        if not tweet_id:
-                            continue
-
-                        lines = [line.strip() for line in inner_text.splitlines() if line.strip()]
-                        full_text = " ".join(lines)
-
-                        results.append(TweetPost(
-                            id=tweet_id,
-                            text=full_text,
-                            author_username=author_username,
-                            created_at="",
-                            url=tweet_url,
-                            keyword=keyword
-                        ))
-                    except Exception as el_err:
-                        logger.warning(f"Error parsing tweet element: {el_err}")
-
-                await browser.close()
-
+            session = cr.Session(impersonate="chrome124")
+            session.cookies.set("auth_token", self.auth_token, domain=".x.com")
+            resp = session.get("https://x.com/home", allow_redirects=True, timeout=20)
+            ct0 = session.cookies.get("ct0")
+            twid = session.cookies.get("twid", "")
+            logger.info(f"ct0 obtained: {'YES' if ct0 else 'NO'} (HTTP {resp.status_code})")
+            return ct0, twid
         except Exception as e:
-            logger.error(f"Playwright error during search for '{keyword}': {e}")
+            logger.error(f"Failed to fetch ct0: {e}")
+            return None, None
 
-        return results
+    async def _search_async(self, keywords: List[str], max_per_keyword: int) -> List[TweetPost]:
+        """Run all keyword searches via twscrape."""
+        ct0, twid = self._get_ct0()
+        if not ct0:
+            logger.error("Cannot search — ct0 cookie not obtained.")
+            return []
 
-    def search_keyword(self, keyword: str, max_results: int = 15) -> List[TweetPost]:
-        return self._scrape_keyword_sync(keyword, max_results)
+        # Build cookie string
+        cookie_str = f"auth_token={self.auth_token}; ct0={ct0}"
+        if twid:
+            cookie_str += f"; twid={twid}"
+
+        # Remove stale DB to avoid "account already exists" warning
+        if os.path.exists(self._API_DB):
+            os.remove(self._API_DB)
+
+        api = twscrape.API(self._API_DB)
+        await api.pool.add_account(
+            username="x_monitor_account",
+            password="dummy",
+            email="dummy@dummy.com",
+            email_password="dummy",
+            cookies=cookie_str,
+        )
+
+        accounts = await api.pool.get_all()
+        if not accounts or not accounts[0].active:
+            logger.error("twscrape account is not active — cookies may be invalid.")
+            return []
+
+        logger.info("twscrape account active. Starting keyword searches.")
+
+        all_posts: List[TweetPost] = []
+        for keyword in keywords:
+            logger.info(f"Searching for keyword: '{keyword}'")
+            count = 0
+            try:
+                async for tweet in api.search(f"{keyword} lang:en", limit=max_per_keyword):
+                    try:
+                        post = TweetPost(
+                            id=str(tweet.id),
+                            text=tweet.rawContent or "",
+                            author_username=tweet.user.username if tweet.user else "unknown",
+                            created_at=str(tweet.date) if tweet.date else "",
+                            url=tweet.url or f"https://x.com/i/web/status/{tweet.id}",
+                            keyword=keyword,
+                        )
+                        all_posts.append(post)
+                        count += 1
+                    except Exception as parse_err:
+                        logger.warning(f"Error parsing tweet: {parse_err}")
+                logger.info(f"Found {count} tweets for '{keyword}'.")
+            except Exception as search_err:
+                logger.error(f"twscrape search error for '{keyword}': {search_err}")
+            time.sleep(0.5)
+
+        return all_posts
 
     def fetch_all_new_posts(self, keywords: List[str]) -> List[TweetPost]:
-        all_posts: List[TweetPost] = []
-        for kw in keywords:
-            posts = self.search_keyword(kw, max_results=config.MAX_TWEETS_PER_KEYWORD)
-            logger.info(f"Retrieved {len(posts)} posts for '{kw}'.")
-            all_posts.extend(posts)
-        return all_posts
+        if not self.auth_token:
+            logger.error("TWITTER_AUTH_TOKEN is not set!")
+            return []
+        return asyncio.run(self._search_async(keywords, config.MAX_TWEETS_PER_KEYWORD))
+
+    def search_keyword(self, keyword: str, max_results: int = 15) -> List[TweetPost]:
+        return self.fetch_all_new_posts([keyword])
