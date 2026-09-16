@@ -71,9 +71,9 @@ class XMonitor:
                 
                 try:
                     await page.goto(search_url, wait_until="domcontentloaded", timeout=25000)
-                    await page.wait_for_timeout(4000)
+                    await page.wait_for_selector('[data-testid="tweet"]', timeout=15000)
                 except Exception as goto_err:
-                    logger.warning(f"Page navigation timeout or error: {goto_err}")
+                    logger.warning(f"Wait for tweet selector notice: {goto_err}")
 
                 # Scroll down slightly to trigger loading extra tweets
                 await page.evaluate("window.scrollBy(0, 800)")
