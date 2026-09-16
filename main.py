@@ -16,6 +16,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger("X_Hiring_Monitor")
 
+from datetime import datetime, timezone
+
+def is_recent_tweet(created_at_str: str, max_age_minutes: int = 45) -> bool:
+    """Ignore any tweet older than max_age_minutes to prevent re-alerting on old historical posts."""
+    try:
+        dt = datetime.fromisoformat(created_at_str)
+        now = datetime.now(timezone.utc)
+        age_minutes = (now - dt).total_seconds() / 60
+        return age_minutes <= max_age_minutes
+    except Exception:
+        return True
+
 def run_monitor():
     logger.info("Starting X (Twitter) Hiring Post Monitor run...")
     
@@ -34,7 +46,17 @@ def run_monitor():
     logger.info(f"Retrieved {len(posts)} total posts across all keywords.")
 
     new_posts = [p for p in posts if not state_mgr.is_seen(p.id)]
-    logger.info(f"Found {len(new_posts)} un-seen posts to evaluate.")
+    
+    # Filter out old historical posts (> 45m old) and mark them seen silently
+    fresh_posts = []
+    for p in new_posts:
+        if is_recent_tweet(p.created_at, max_age_minutes=45):
+            fresh_posts.append(p)
+        else:
+            state_mgr.mark_seen(p.id)
+    new_posts = fresh_posts
+
+    logger.info(f"Found {len(new_posts)} fresh un-seen posts (< 45m old) to evaluate.")
 
     # Cap to max 15 candidate posts per 5-minute run for speed and strict quota safety
     MAX_PER_RUN = 15
