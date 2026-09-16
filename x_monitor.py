@@ -1,6 +1,7 @@
 import logging
 import asyncio
 import re
+import urllib.parse
 from dataclasses import dataclass
 from typing import List, Optional
 from playwright.async_api import async_playwright
@@ -19,18 +20,15 @@ class TweetPost:
 
 class XMonitor:
     def __init__(self):
-        self.auth_token = config.TWITTER_BEARER_TOKEN.strip()
+        self.auth_token = config.TWITTER_AUTH_TOKEN.strip()
 
     def _scrape_keyword_sync(self, keyword: str, max_results: int = 15) -> List[TweetPost]:
-        """
-        Runs Playwright search in an event loop to fetch live tweets for a keyword.
-        """
         return asyncio.run(self._scrape_keyword_async(keyword, max_results))
 
     async def _scrape_keyword_async(self, keyword: str, max_results: int = 15) -> List[TweetPost]:
         results: List[TweetPost] = []
         if not self.auth_token:
-            logger.error("No auth_token provided in TWITTER_BEARER_TOKEN!")
+            logger.error("No auth_token provided in TWITTER_AUTH_TOKEN!")
             return results
 
         logger.info(f"Playwright searching X for keyword: '{keyword}'...")
@@ -69,7 +67,7 @@ class XMonitor:
                 ])
 
                 page = await context.new_page()
-                search_url = f"https://x.com/search?q={urllib_parse_quote(keyword)}&f=live"
+                search_url = f"https://x.com/search?q={urllib.parse.quote(keyword)}&f=live"
                 
                 try:
                     await page.goto(search_url, wait_until="domcontentloaded", timeout=25000)
@@ -90,7 +88,6 @@ class XMonitor:
                         if not inner_text:
                             continue
 
-                        # Extract status link
                         status_links = await t_el.query_selector_all('a[href*="/status/"]')
                         tweet_url = ""
                         tweet_id = ""
@@ -109,7 +106,6 @@ class XMonitor:
                         if not tweet_id:
                             continue
 
-                        # Clean text
                         lines = [line.strip() for line in inner_text.splitlines() if line.strip()]
                         full_text = " ".join(lines)
 
@@ -141,7 +137,3 @@ class XMonitor:
             logger.info(f"Retrieved {len(posts)} posts for '{kw}'.")
             all_posts.extend(posts)
         return all_posts
-
-def urllib_parse_quote(text: str) -> str:
-    import urllib.parse
-    return urllib.parse.quote(text)
