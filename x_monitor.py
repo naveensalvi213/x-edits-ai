@@ -41,19 +41,55 @@ class XMonitor:
     def __init__(self):
         self.auth_token = config.TWITTER_AUTH_TOKEN.strip()
 
-    def _get_ct0(self) -> Optional[str]:
-        """Use curl_cffi (Chrome TLS impersonation) to obtain the ct0 CSRF cookie."""
-        try:
-            session = cr.Session(impersonate="chrome124")
-            session.cookies.set("auth_token", self.auth_token, domain=".x.com")
-            resp = session.get("https://x.com/home", allow_redirects=True, timeout=20)
-            ct0 = session.cookies.get("ct0")
-            twid = session.cookies.get("twid", "")
-            logger.info(f"ct0 obtained: {'YES' if ct0 else 'NO'} (HTTP {resp.status_code})")
-            return ct0, twid
-        except Exception as e:
-            logger.error(f"Failed to fetch ct0: {e}")
-            return None, None
+    def _get_ct0(self) -> tuple:
+        """
+        Use curl_cffi (Chrome TLS impersonation) to obtain the ct0 CSRF cookie.
+        
+        Key insight: ANY request to x.com — even ones returning 403 — will set
+        the ct0 cookie. We try multiple endpoints in order, stopping at the first
+        that provides ct0. This works even on GitHub Actions cloud IPs that may
+        get 403 from x.com/home.
+        """
+        BEARER = (
+            "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs"
+            "%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
+        )
+        
+        # Try URLs in order — badge_count works from cloud IPs even when it 403s
+        urls_to_try = [
+            ("https://x.com/home", {}),
+            ("https://x.com/", {}),
+            ("https://x.com/i/flow/login", {}),
+            ("https://x.com/search?q=hello&f=live", {}),
+            # Lightweight API endpoint — 403 response but STILL sets ct0 cookie!
+            ("https://x.com/i/api/2/badge_count/badge_count.json?supports_ntab_urt=1", {
+                "authorization": f"Bearer {BEARER}",
+                "x-twitter-active-user": "yes",
+            }),
+        ]
+        
+        for url, extra_headers in urls_to_try:
+            try:
+                session = cr.Session(impersonate="chrome124")
+                session.cookies.set("auth_token", self.auth_token, domain=".x.com")
+                resp = session.get(
+                    url, 
+                    allow_redirects=True, 
+                    timeout=15,
+                    headers=extra_headers if extra_headers else None,
+                )
+                ct0 = session.cookies.get("ct0")
+                twid = session.cookies.get("twid", "")
+                if ct0:
+                    logger.info(f"ct0 obtained from {url.split('?')[0].split('/')[-1]} (HTTP {resp.status_code})")
+                    return ct0, twid
+                else:
+                    logger.debug(f"ct0 not set by {url.split('?')[0]} (HTTP {resp.status_code})")
+            except Exception as e:
+                logger.debug(f"Failed to fetch ct0 from {url}: {e}")
+        
+        logger.error("Failed to obtain ct0 from all URL attempts.")
+        return None, None
 
     async def _search_async(self, keywords: List[str], max_per_keyword: int) -> List[TweetPost]:
         """Run all keyword searches via twscrape."""
