@@ -1,0 +1,13 @@
+﻿services:
+  - type: web
+    name: x-edits-ai
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: TWS_HTTP_BACKEND
+        value: curl
+      - key: TWS_RAISE_WHEN_NO_ACCOUNT
+        value: "1"
