@@ -158,14 +158,19 @@ class XMonitor:
         logger.info(f"twscrape account active with proxy {proxy.split('@')[-1]}. Starting searches...")
 
         all_posts: List[TweetPost] = []
+        seen_ids_in_search = set()
         for keyword in keywords:
             logger.info(f"Searching for keyword: '{keyword}'")
             count = 0
             try:
                 async for tweet in api.search(f"{keyword} lang:en", limit=max_per_keyword):
                     try:
+                        tweet_id = str(tweet.id)
+                        if tweet_id in seen_ids_in_search:
+                            continue
+                        seen_ids_in_search.add(tweet_id)
                         post = TweetPost(
-                            id=str(tweet.id),
+                            id=tweet_id,
                             text=tweet.rawContent or "",
                             author_username=tweet.user.username if tweet.user else "unknown",
                             created_at=str(tweet.date) if tweet.date else "",
@@ -176,7 +181,7 @@ class XMonitor:
                         count += 1
                     except Exception as parse_err:
                         logger.warning(f"Error parsing tweet: {parse_err}")
-                logger.info(f"Found {count} tweets for '{keyword}'.")
+                logger.info(f"Found {count} unique tweets for '{keyword}'.")
             except Exception as search_err:
                 logger.error(f"twscrape search error for '{keyword}': {search_err}")
             time.sleep(1)

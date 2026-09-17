@@ -28,11 +28,13 @@ def is_recent_tweet(created_at_str: str, max_age_minutes: int = 45) -> bool:
     except Exception:
         return True
 
+# Shared persistent state across runs in the same process
+global_state_mgr = StateManager()
+
 def run_monitor():
     logger.info("Starting X (Twitter) Hiring Post Monitor run...")
     
     # 1. Initialize components
-    state_mgr = StateManager()
     x_monitor = XMonitor()
     gemini_analyzer = GeminiAnalyzer()
     telegram_notifier = TelegramNotifier()
@@ -45,17 +47,19 @@ def run_monitor():
     posts = x_monitor.fetch_all_new_posts(keywords)
     logger.info(f"Retrieved {len(posts)} total posts across all keywords.")
 
-    new_posts = [p for p in posts if not state_mgr.is_seen(p.id)]
-    
-    # Filter out old historical posts (> 45m old) and mark them seen silently
+    # Strict deduplication across keywords and state manager
+    seen_in_batch = set()
     fresh_posts = []
-    for p in new_posts:
+    for p in posts:
+        if p.id in seen_in_batch or global_state_mgr.is_seen(p.id):
+            continue
+        seen_in_batch.add(p.id)
         if is_recent_tweet(p.created_at, max_age_minutes=45):
             fresh_posts.append(p)
         else:
-            state_mgr.mark_seen(p.id)
-    new_posts = fresh_posts
+            global_state_mgr.mark_seen(p.id)
 
+    new_posts = fresh_posts
     logger.info(f"Found {len(new_posts)} fresh un-seen posts (< 45m old) to evaluate.")
 
     # Cap to max 15 candidate posts per 5-minute run for speed and strict quota safety
@@ -70,7 +74,7 @@ def run_monitor():
     # 3. Analyze each new post with Gemini and notify via Telegram if qualified
     for post in new_posts:
         # Mark as seen so we don't re-process in case of retry
-        state_mgr.mark_seen(post.id)
+        global_state_mgr.mark_seen(post.id)
 
         logger.info(f"Evaluating tweet ID {post.id} by @{post.author_username} ('{post.keyword}')...")
         analysis = gemini_analyzer.analyze_post(post.text, post.author_username)
@@ -111,7 +115,7 @@ def run_monitor():
         time.sleep(4.0)
 
     # 4. Save updated state
-    state_mgr.save()
+    global_state_mgr.save()
     logger.info(f"Run completed. Evaluated: {len(new_posts)} | Qualified: {qualified_count} | Telegram Alerts: {alerts_sent}")
 
 if __name__ == "__main__":
