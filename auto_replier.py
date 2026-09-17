@@ -1,4 +1,4 @@
-﻿import os
+import os
 import json
 import time
 import logging
@@ -26,6 +26,7 @@ class AutoReplier:
         # In-memory and persistent state
         self.replied_ids: Set[str] = set()
         self.reply_history: list = []     # List of timestamps (epoch seconds)
+        self.auth_token = os.environ.get("REPLY_AUTH_TOKEN", os.environ.get("TWITTER_AUTH_TOKEN", "")).strip()
         self._load_state()
 
     def _load_state(self):
@@ -105,13 +106,14 @@ class AutoReplier:
             logger.info(f"Auto-reply skipped for tweet {tweet_id} by @{author_username}: {reason}")
             return False
 
-        auth_token = os.environ.get("TWITTER_AUTH_TOKEN", "").strip()
+        auth_token = self.auth_token
         if not auth_token:
-            logger.error("Cannot reply: TWITTER_AUTH_TOKEN missing.")
+            logger.error("Cannot reply: REPLY_AUTH_TOKEN/TWITTER_AUTH_TOKEN missing.")
             return False
 
-        # Use XMonitor proxy helper to get ct0
+        # Use XMonitor proxy helper to get ct0 specifically for this auth_token
         xm = XMonitor()
+        xm.auth_token = auth_token
         proxy = xm.proxies[0] if xm.proxies else None
         ct0, _ = xm._get_ct0(proxy=proxy)
 
@@ -185,6 +187,10 @@ class AutoReplier:
             
             if resp.status_code == 200:
                 data = resp.json()
+                if "errors" in data and data["errors"]:
+                    err_msg = data["errors"][0].get("message", "Unknown error")
+                    logger.error(f"X API returned error when replying to @{author_username}: {err_msg}")
+                    return False
                 if "data" in data and "create_tweet" in data.get("data", {}):
                     logger.info(f"SUCCESS: Auto-reply posted to @{author_username} (ID {tweet_id})!")
                     self.replied_ids.add(tweet_id)
