@@ -4,7 +4,7 @@ import time
 import json
 import logging
 import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import HTTPServer, ThreadingHTTPServer, BaseHTTPRequestHandler
 from datetime import datetime
 
 import config
@@ -89,7 +89,7 @@ class HealthHandler(BaseHTTPRequestHandler):
 def run_server():
     port = int(os.environ.get("PORT", 8080))
     server_address = ("0.0.0.0", port)
-    httpd = HTTPServer(server_address, HealthHandler)
+    httpd = ThreadingHTTPServer(server_address, HealthHandler)
     logger.info(f"Render HTTP server listening on port {port}...")
 
     worker_thread = threading.Thread(target=background_monitor_worker, daemon=True)
