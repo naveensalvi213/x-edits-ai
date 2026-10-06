@@ -32,7 +32,7 @@ class AutoReplier:
     def _load_state(self):
         if os.path.exists(self.state_file):
             try:
-                with open(self.state_file, "r", encoding="utf-8") as f:
+                with open(self.state_file, "r", encoding="utf-8-sig") as f:
                     data = json.load(f)
                     self.replied_ids = set(data.get("replied_ids", []))
                     self.reply_history = data.get("reply_history", [])
