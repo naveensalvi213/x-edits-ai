@@ -71,51 +71,53 @@ def run_monitor():
     qualified_count = 0
     alerts_sent = 0
 
-    # 3. Analyze each new post with Gemini and notify via Telegram if qualified
-    for post in new_posts:
-        # Mark as seen so we don't re-process in case of retry
-        global_state_mgr.mark_seen(post.id)
+    try:
+        # 3. Analyze each new post with Gemini and notify via Telegram if qualified
+        for post in new_posts:
+            # Mark as seen so we don't re-process in case of retry
+            global_state_mgr.mark_seen(post.id)
 
-        logger.info(f"Evaluating tweet ID {post.id} by @{post.author_username} ('{post.keyword}')...")
-        analysis = gemini_analyzer.analyze_post(post.text, post.author_username)
+            logger.info(f"Evaluating tweet ID {post.id} by @{post.author_username} ('{post.keyword}')...")
+            analysis = gemini_analyzer.analyze_post(post.text, post.author_username)
 
-        if analysis.is_hiring_post:
-            qualified_count += 1
-            logger.info(f"QUALIFIED LEAD! Role: {analysis.role_type} | Tweet by @{post.author_username}")
+            if analysis.is_hiring_post:
+                qualified_count += 1
+                logger.info(f"QUALIFIED LEAD! Role: {analysis.role_type} | Tweet by @{post.author_username}")
 
-            success = telegram_notifier.send_hiring_alert(
-                role_type=analysis.role_type,
-                author_username=post.author_username,
-                tweet_text=post.text,
-                tweet_url=post.url,
-                keyword=post.keyword,
-                reasoning=analysis.reasoning,
-                personalized_comment=analysis.personalized_comment
-            )
-            if success:
-                alerts_sent += 1
-
-            # Auto-reply during night window (11 PM - 7 AM IST) with human pacing
-            if analysis.personalized_comment:
-                replied = auto_replier.post_reply(
-                    tweet_id=post.id,
+                success = telegram_notifier.send_hiring_alert(
+                    role_type=analysis.role_type,
                     author_username=post.author_username,
-                    comment_text=analysis.personalized_comment
+                    tweet_text=post.text,
+                    tweet_url=post.url,
+                    keyword=post.keyword,
+                    reasoning=analysis.reasoning,
+                    personalized_comment=analysis.personalized_comment
                 )
-                if replied:
-                    telegram_notifier.send_auto_reply_notification(
+                if success:
+                    alerts_sent += 1
+
+                # Auto-reply during night window (11 PM - 7 AM IST) with human pacing
+                if analysis.personalized_comment:
+                    replied = auto_replier.post_reply(
+                        tweet_id=post.id,
                         author_username=post.author_username,
-                        tweet_url=post.url,
-                        comment=analysis.personalized_comment
+                        comment_text=analysis.personalized_comment
                     )
-        else:
-            logger.info(f"Disqualified tweet ID {post.id}: {analysis.reasoning}")
+                    if replied:
+                        telegram_notifier.send_auto_reply_notification(
+                            author_username=post.author_username,
+                            tweet_url=post.url,
+                            comment=analysis.personalized_comment
+                        )
+            else:
+                logger.info(f"Disqualified tweet ID {post.id}: {analysis.reasoning}")
 
-        # Pace calls (4.0s) to strictly stay within the 15 RPM Gemini Free Tier limit
-        time.sleep(4.0)
+            # Pace calls (4.0s) to strictly stay within the 15 RPM Gemini Free Tier limit
+            time.sleep(4.0)
+    finally:
+        # 4. Save updated state (synced with GitHub API)
+        global_state_mgr.save()
 
-    # 4. Save updated state
-    global_state_mgr.save()
     logger.info(f"Run completed. Evaluated: {len(new_posts)} | Qualified: {qualified_count} | Telegram Alerts: {alerts_sent}")
 
 if __name__ == "__main__":

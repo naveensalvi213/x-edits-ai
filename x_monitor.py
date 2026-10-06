@@ -160,18 +160,35 @@ class XMonitor:
         all_posts: List[TweetPost] = []
         seen_ids_in_search = set()
         for keyword in keywords:
-            logger.info(f"Searching for keyword: '{keyword}'")
+            search_query = f"{keyword} lang:en -filter:replies -filter:retweets"
+            logger.info(f"Searching for query: '{search_query}'")
             count = 0
             try:
-                async for tweet in api.search(f"{keyword} lang:en", limit=max_per_keyword):
+                async for tweet in api.search(search_query, limit=max_per_keyword):
                     try:
                         tweet_id = str(tweet.id)
                         if tweet_id in seen_ids_in_search:
                             continue
                         seen_ids_in_search.add(tweet_id)
+
+                        # Skip replies, retweets, or tweets replying/mentioning another user
+                        if (
+                            getattr(tweet, "inReplyToTweetId", None)
+                            or getattr(tweet, "inReplyToUser", None)
+                            or getattr(tweet, "inReplyToScreenName", None)
+                            or getattr(tweet, "retweetedTweet", None)
+                        ):
+                            logger.info(f"Skipping reply/retweet tweet {tweet_id}")
+                            continue
+
+                        raw_text = (tweet.rawContent or "").strip()
+                        if raw_text.startswith("@"):
+                            logger.info(f"Skipping tweet {tweet_id}: text starts with '@' (mention/reply)")
+                            continue
+
                         post = TweetPost(
                             id=tweet_id,
-                            text=tweet.rawContent or "",
+                            text=raw_text,
                             author_username=tweet.user.username if tweet.user else "unknown",
                             created_at=str(tweet.date) if tweet.date else "",
                             url=tweet.url or f"https://x.com/i/web/status/{tweet.id}",

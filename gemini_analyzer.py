@@ -65,13 +65,13 @@ class GeminiAnalyzer:
             "looking for work as",
         ]
 
+        # Disqualify any tweet starting with @ (replies or mentions)
+        if lower.startswith("@"):
+            return "Fast filter: Tweet is a reply or mention (starts with @)"
+
         for phrase in self_promo_phrases:
             if phrase in lower:
                 return f"Fast filter: Self-promotion detected ('{phrase}')"
-
-        # If it's a direct reply starting with a greeting pitching services
-        if lower.startswith("@") and ("saw your post" in lower or "saw you're hiring" in lower):
-            return "Fast filter: Freelancer replying to a hiring post"
 
         return None
 
