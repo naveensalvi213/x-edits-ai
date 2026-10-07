@@ -47,13 +47,17 @@ def run_monitor():
     posts = x_monitor.fetch_all_new_posts(keywords)
     logger.info(f"Retrieved {len(posts)} total posts across all keywords.")
 
-    # Strict deduplication across keywords and state manager
+    # Strict deduplication across keywords, tweet IDs, and 24h author window
     seen_in_batch = set()
     fresh_posts = []
     for p in posts:
         if p.id in seen_in_batch or global_state_mgr.is_seen(p.id):
             continue
         seen_in_batch.add(p.id)
+        if global_state_mgr.is_author_recently_seen(p.author_username, cooldown_hours=24):
+            logger.info(f"Skipping post {p.id} by @{p.author_username}: already picked post from this author within 24h.")
+            global_state_mgr.mark_seen(p.id)
+            continue
         if is_recent_tweet(p.created_at, max_age_minutes=45):
             fresh_posts.append(p)
         else:
@@ -77,11 +81,16 @@ def run_monitor():
             # Mark as seen so we don't re-process in case of retry
             global_state_mgr.mark_seen(post.id)
 
+            if global_state_mgr.is_author_recently_seen(post.author_username, cooldown_hours=24):
+                logger.info(f"Skipping tweet ID {post.id} by @{post.author_username}: author already picked in last 24h.")
+                continue
+
             logger.info(f"Evaluating tweet ID {post.id} by @{post.author_username} ('{post.keyword}')...")
             analysis = gemini_analyzer.analyze_post(post.text, post.author_username)
 
             if analysis.is_hiring_post:
                 qualified_count += 1
+                global_state_mgr.mark_author_seen(post.author_username)
                 logger.info(f"QUALIFIED LEAD! Role: {analysis.role_type} | Tweet by @{post.author_username}")
 
                 success = telegram_notifier.send_hiring_alert(
