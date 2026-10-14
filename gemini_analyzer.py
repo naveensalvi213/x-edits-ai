@@ -134,7 +134,7 @@ Respond ONLY with a valid JSON object strictly matching this schema:
 """
 
         max_retries = 3
-        models_to_try = ['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-3.5-flash']
+        models_to_try = ['gemini-3.5-flash-lite', 'gemini-3.5-flash', 'gemini-flash-lite-latest']
         for attempt in range(max_retries):
             model_name = models_to_try[attempt % len(models_to_try)]
             try:

@@ -52,8 +52,6 @@ class TelegramNotifier:
             f"🔑 <b>Keyword:</b> <code>{safe_kw}</code>\n\n"
             "📝 <b>Post Content:</b>\n"
             f"<i>\"{safe_text}\"</i>\n\n"
-            "💡 <b>Gemini Qualification:</b>\n"
-            f"<code>{safe_reasoning}</code>\n\n"
             "💬 <b>Suggested Pitch Comment:</b>\n"
             f"<code>{safe_comment}</code>\n\n"
             f"🔗 <a href=\"{tweet_url}\">Open Post on X (Twitter)</a>"

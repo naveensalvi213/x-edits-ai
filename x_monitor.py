@@ -21,17 +21,8 @@ import config
 
 logger = logging.getLogger(__name__)
 
-# Pool of Webshare proxies to bypass datacenter IP blocks on cloud runners
-DEFAULT_PROXIES = [
-    "http://umskkzac:k6inespkkljj@31.59.20.176:6754",
-    "http://umskkzac:k6inespkkljj@45.38.107.97:6014",
-    "http://umskkzac:k6inespkkljj@198.105.121.200:6462",
-    "http://umskkzac:k6inespkkljj@64.137.96.74:6641",
-    "http://umskkzac:k6inespkkljj@198.23.243.226:6361",
-    "http://umskkzac:k6inespkkljj@38.154.185.97:6370",
-    "http://umskkzac:k6inespkkljj@84.247.60.125:6095",
-    "http://umskkzac:k6inespkkljj@142.111.67.146:5611",
-]
+# Default to direct connection (None). If PROXY_URL is set in environment, try it first with direct fallback.
+DEFAULT_PROXIES = []
 
 
 @dataclass
@@ -46,8 +37,8 @@ class TweetPost:
 
 class XMonitor:
     """
-    Scrapes X search results using twscrape + curl_cffi (Chrome TLS fingerprint)
-    routed through Webshare proxies to bypass Cloudflare/X datacenter IP blocking.
+    Scrapes X search results using twscrape + curl_cffi (Chrome TLS fingerprint).
+    Uses direct TLS connection by default, with optional proxy support via PROXY_URL.
     """
 
     def __init__(self):
@@ -55,9 +46,9 @@ class XMonitor:
         self._db_path = os.path.join(tempfile.gettempdir(), "twscrape_x_monitor.db")
         custom_proxy = os.getenv("PROXY_URL", "").strip()
         if custom_proxy:
-            self.proxies = [custom_proxy]
+            self.proxies = [custom_proxy, None]
         else:
-            self.proxies = list(DEFAULT_PROXIES)
+            self.proxies = [None]
 
     def _get_active_proxy(self) -> Optional[str]:
         """Returns a proxy from the pool."""
@@ -155,7 +146,8 @@ class XMonitor:
             logger.error("twscrape account is not active — cookies may be invalid.")
             return []
 
-        logger.info(f"twscrape account active with proxy {proxy.split('@')[-1]}. Starting searches...")
+        proxy_desc = proxy.split('@')[-1] if proxy else 'direct'
+        logger.info(f"twscrape account active via {proxy_desc}. Starting searches...")
 
         all_posts: List[TweetPost] = []
         seen_ids_in_search = set()
