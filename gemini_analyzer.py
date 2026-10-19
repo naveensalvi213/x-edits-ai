@@ -15,7 +15,6 @@ class GeminiAnalysisResult:
     is_hiring_post: bool
     role_type: str
     reasoning: str
-    personalized_comment: str
 
 
 class GeminiAnalyzer:
@@ -101,7 +100,7 @@ class GeminiAnalyzer:
             )
 
         prompt = f"""
-You are an expert AI recruiter and outreach assistant for a high-end Video Editing & Thumbnail Design agency.
+You are an expert classifier for a Video Editing & Thumbnail Design agency.
 
 Analyze the following X (Twitter) post by user @{author_username}:
 
@@ -113,23 +112,15 @@ POST CONTENT:
 TASK:
 1. Determine if this post is a GENUINE client/creator/agency looking to HIRE or CONTRACT a Video Editor or Thumbnail Designer.
    - MUST QUALIFY (True): The poster is looking to pay/hire an editor or thumbnail designer for their channel/project.
-   - MUST DISQUALIFY (False): Self-promotions (e.g. "I am a video editor for hire", "DM me for editing services"), portfolio showcases, general advice, memes, or bot posts.
+   - MUST DISQUALIFY (False): Self-promotions ("I am a video editor for hire", "DM me for editing"), portfolio showcases, general advice, memes, or bot posts.
 
 2. Identify the role needed: "Video Editor", "Thumbnail Designer", "Both", or "Other".
 
-3. If qualified, write an ultra-short, natural, personalized reply comment (1 to 2 short sentences max) for X/Twitter.
-   - Address their specific niche, video style, or project requirement mentioned in their post.
-   - CRITICAL RULE: NEVER say "I DMed you", "Sent you a DM", or "Check your DMs".
-   - CRITICAL RULE: ALWAYS invite THEM to DM you (e.g., "Feel free to drop me a DM with the details!", "Shoot me a DM if you're still looking!", "DM me and let's connect!").
-   - CRITICAL RULE: NEVER include links, URLs, or hashtags.
-   - Sound casual, human, confident, professional, and non-spammy.
-
-Respond ONLY with a valid JSON object strictly matching this schema:
+Respond ONLY with a valid JSON object:
 {{
   "is_hiring_post": boolean,
   "role_type": string,
-  "reasoning": string,
-  "personalized_comment": string
+  "reasoning": string
 }}
 """
 
@@ -153,8 +144,7 @@ Respond ONLY with a valid JSON object strictly matching this schema:
                 return GeminiAnalysisResult(
                     is_hiring_post=bool(data.get("is_hiring_post", False)),
                     role_type=str(data.get("role_type", "Unknown")),
-                    reasoning=str(data.get("reasoning", "")),
-                    personalized_comment=str(data.get("personalized_comment", ""))
+                    reasoning=str(data.get("reasoning", ""))
                 )
 
             except Exception as e:
@@ -169,13 +159,11 @@ Respond ONLY with a valid JSON object strictly matching this schema:
                 return GeminiAnalysisResult(
                     is_hiring_post=False,
                     role_type="Unknown",
-                    reasoning=f"Error analyzing post: {err_str}",
-                    personalized_comment=""
+                    reasoning=f"Error analyzing post: {err_str}"
                 )
 
         return GeminiAnalysisResult(
             is_hiring_post=False,
             role_type="Unknown",
-            reasoning="Gemini rate limit exceeded after retries.",
-            personalized_comment=""
+            reasoning="Gemini rate limit exceeded after retries."
         )

@@ -25,9 +25,7 @@ class TelegramNotifier:
         author_username: str,
         tweet_text: str,
         tweet_url: str,
-        keyword: str,
-        reasoning: str,
-        personalized_comment: str
+        keyword: str
     ) -> bool:
         """
         Sends a formatted hiring lead notification to Telegram.
@@ -39,22 +37,18 @@ class TelegramNotifier:
 
         # Escape user-generated text for safe HTML rendering in Telegram
         safe_text = html.escape(tweet_text)
-        safe_reasoning = html.escape(reasoning)
-        safe_comment = html.escape(personalized_comment)
         safe_role = html.escape(role_type)
         safe_kw = html.escape(keyword)
         safe_author = html.escape(author_username)
 
         message = (
-            "🚨 <b>NEW HIRING POST DETECTED ON X!</b>\n\n"
-            f"🎯 <b>Target Role:</b> {safe_role}\n"
-            f"👤 <b>Author:</b> @{safe_author}\n"
-            f"🔑 <b>Keyword:</b> <code>{safe_kw}</code>\n\n"
-            "📝 <b>Post Content:</b>\n"
+            "\U0001f6a8 <b>NEW HIRING POST DETECTED ON X!</b>\n\n"
+            f"\U0001f3af <b>Target Role:</b> {safe_role}\n"
+            f"\U0001f464 <b>Author:</b> @{safe_author}\n"
+            f"\U0001f511 <b>Keyword:</b> <code>{safe_kw}</code>\n\n"
+            "\U0001f4dd <b>Post Content:</b>\n"
             f"<i>\"{safe_text}\"</i>\n\n"
-            "💬 <b>Suggested Pitch Comment:</b>\n"
-            f"<code>{safe_comment}</code>\n\n"
-            f"🔗 <a href=\"{tweet_url}\">Open Post on X (Twitter)</a>"
+            f"\U0001f517 <a href=\"{tweet_url}\">Open Post on X (Twitter)</a>"
         )
 
         telegram_api_url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"

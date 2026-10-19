@@ -16,55 +16,38 @@ logging.basicConfig(
 )
 logger = logging.getLogger("X_Hiring_Monitor")
 
-from datetime import datetime, timezone
-
-def is_recent_tweet(created_at_str: str, max_age_minutes: int = 45) -> bool:
-    """Ignore any tweet older than max_age_minutes to prevent re-alerting on old historical posts."""
-    try:
-        dt = datetime.fromisoformat(created_at_str)
-        now = datetime.now(timezone.utc)
-        age_minutes = (now - dt).total_seconds() / 60
-        return age_minutes <= max_age_minutes
-    except Exception:
-        return True
-
 # Shared persistent state across runs in the same process
 global_state_mgr = StateManager()
 
 def run_monitor():
     logger.info("Starting X (Twitter) Hiring Post Monitor run...")
-    
+
     # 1. Initialize components
     x_monitor = XMonitor()
     gemini_analyzer = GeminiAnalyzer()
     telegram_notifier = TelegramNotifier()
-    auto_replier = AutoReplier()
 
     keywords = config.get_keywords()
     logger.info(f"Target Keywords ({len(keywords)}): {keywords}")
 
-    # 2. Fetch recent posts from X
+    # 2. Fetch posts from X
     posts = x_monitor.fetch_all_new_posts(keywords)
     logger.info(f"Retrieved {len(posts)} total posts across all keywords.")
 
-    # Strict deduplication across keywords, tweet IDs, and 24h author window
+    # Deduplication: skip any post ever seen before + skip authors seen in last 24h
     seen_in_batch = set()
-    fresh_posts = []
+    new_posts = []
     for p in posts:
         if p.id in seen_in_batch or global_state_mgr.is_seen(p.id):
             continue
         seen_in_batch.add(p.id)
         if global_state_mgr.is_author_recently_seen(p.author_username, cooldown_hours=24):
-            logger.info(f"Skipping post {p.id} by @{p.author_username}: already picked post from this author within 24h.")
+            logger.info(f"Skipping post {p.id} by @{p.author_username}: author already alerted within 24h.")
             global_state_mgr.mark_seen(p.id)
             continue
-        if is_recent_tweet(p.created_at, max_age_minutes=45):
-            fresh_posts.append(p)
-        else:
-            global_state_mgr.mark_seen(p.id)
+        new_posts.append(p)
 
-    new_posts = fresh_posts
-    logger.info(f"Found {len(new_posts)} fresh un-seen posts (< 45m old) to evaluate.")
+    logger.info(f"Found {len(new_posts)} never-seen posts to evaluate.")
 
     # Cap to max 15 candidate posts per 5-minute run for speed and strict quota safety
     MAX_PER_RUN = 15
@@ -98,30 +81,14 @@ def run_monitor():
                     author_username=post.author_username,
                     tweet_text=post.text,
                     tweet_url=post.url,
-                    keyword=post.keyword,
-                    reasoning=analysis.reasoning,
-                    personalized_comment=analysis.personalized_comment
+                    keyword=post.keyword
                 )
                 if success:
                     alerts_sent += 1
-
-                # Auto-reply during night window (11 PM - 7 AM IST) with human pacing
-                if analysis.personalized_comment:
-                    replied = auto_replier.post_reply(
-                        tweet_id=post.id,
-                        author_username=post.author_username,
-                        comment_text=analysis.personalized_comment
-                    )
-                    if replied:
-                        telegram_notifier.send_auto_reply_notification(
-                            author_username=post.author_username,
-                            tweet_url=post.url,
-                            comment=analysis.personalized_comment
-                        )
             else:
                 logger.info(f"Disqualified tweet ID {post.id}: {analysis.reasoning}")
 
-            # Pace calls (4.0s) to strictly stay within the 15 RPM Gemini Free Tier limit
+            # Pace calls (4.0s) to stay within the 15 RPM Gemini Free Tier limit
             time.sleep(4.0)
     finally:
         # 4. Save updated state (synced with GitHub API)

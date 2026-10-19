@@ -26,7 +26,7 @@ def background_monitor_worker():
     global last_run_time, last_run_status, run_count
     logger.info("Background monitor worker started. Waiting 10s for server warm-up...")
     time.sleep(10)
-    
+
     while True:
         try:
             logger.info("Starting scheduled monitor check...")
@@ -38,9 +38,24 @@ def background_monitor_worker():
         except Exception as e:
             logger.error(f"Error during monitor check: {e}", exc_info=True)
             last_run_status = f"Error: {str(e)}"
-        
+
         logger.info("Monitor cycle finished. Next run in 300 seconds (5 minutes)...")
         time.sleep(300)
+
+
+def self_ping_worker():
+    """Pings own /ping endpoint every 10 minutes to prevent Render free-tier sleep."""
+    import urllib.request
+    time.sleep(30)  # Wait for server to start
+    port = int(os.environ.get("PORT", 8080))
+    url = f"http://localhost:{port}/ping"
+    while True:
+        try:
+            urllib.request.urlopen(url, timeout=5)
+            logger.info("Self-ping sent to keep service alive.")
+        except Exception as e:
+            logger.warning(f"Self-ping failed: {e}")
+        time.sleep(600)  # Every 10 minutes
 
 class HealthHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
@@ -94,6 +109,9 @@ def run_server():
 
     worker_thread = threading.Thread(target=background_monitor_worker, daemon=True)
     worker_thread.start()
+
+    ping_thread = threading.Thread(target=self_ping_worker, daemon=True)
+    ping_thread.start()
 
     try:
         httpd.serve_forever()
